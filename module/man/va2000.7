@@ -154,15 +154,55 @@ The module does this; the static form only when built with
 .TP
 \(bu
 a 68040 or 68060 kernel, either bus: the registers are mapped noncacheable
-and serialised.
-In the static form the framebuffer is also given the faster noncacheable,
-not serialised class; the module leaves it at the kernel's default class.
+and serialised, and the framebuffer is given the faster noncacheable, not
+serialised class when the kernel allows it (see
+.BR "THE FRAMEBUFFER CACHE CLASS" ).
+.SH THE FRAMEBUFFER CACHE CLASS
+On a 68040 or 68060 kernel, the pages of a device mapping are noncacheable and
+serialised: every store waits for the one before.
+The framebuffer needs no serialisation, and in the noncacheable, not
+serialised class its stores drain through the CPU's store buffer, which is
+faster for programs that draw into it.
+The register page always stays serialised.
+.PP
+The static driver registers the framebuffer for that class when the kernel is
+built.
+The module asks the module core for it when it loads, before anything can
+open the device, and prints one line saying which class the framebuffer got:
+.TP 4
+.B "va2000: framebuffer cache class fast (noncacheable, not serialised)"
+granted;
+.TP
+.B "va2000: framebuffer cache class default (this kernel has no fb_register)"
+a 68040/68060 kernel from before the module interface for it (kabi
+k46.1.6);
+.TP
+.B "va2000: framebuffer cache class default (refused, error N)"
+the kernel refused the window, and its own line before this one says why:
+another driver holds it
+.RB ( EBUSY ),
+both of the kernel's slots are taken
+.RB ( ENOSPC ),
+or the window is not one it accepts
+.RB ( EINVAL );
+.TP
+.B "va2000: framebuffer cache class default (the 68030 has no other class)"
+a 68030 kernel, which never caches a device page and buffers no store;
+.TP
+.B "va2000: framebuffer cache class default (module built without fb_register)"
+a module built with an ABI kit from before the interface.
+.PP
+The default class is correct, only slower; the driver works the same in
+either.
+The class covers the first board only: a second board is found at its first
+open, after the module has loaded, and keeps the default class.
+It lasts until the next boot.
 .SH UNTESTED
 The card cannot be emulated.
 The static form has run on a 68040 and a 68060 with a Zorro III board, and
 on a 68030 with a Zorro II board before the Zorro III changes.
-The module has not run on hardware on either kernel line, and the 68030
-Zorro III path has never run.
+The module has not run on hardware on either kernel line, neither has its
+fast framebuffer class, and the 68030 Zorro III path has never run.
 Byte-wide register access has not been tried; the driver makes only aligned
 16-bit accesses.
 .SH ERRORS

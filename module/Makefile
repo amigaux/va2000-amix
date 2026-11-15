@@ -18,9 +18,9 @@
 #   k46  -DVA2000_KVA  registers mapped with dev_kvmap (noncacheable, serialised)
 #   k30  -DVA2000_SPT  a Zorro III board (above 0x40000000) mapped with
 #                      sptalloc; a Zorro II board reached directly
-# FB_CM=1 adds -DVA2000_FB_CM on k46: the framebuffer cache class (see
-# va2000_map_regs in src/va2000.c).  The kernels of today do not offer it to
-# modules, so the checker refuses such a build; leave it off.
+# The framebuffer's cache class is asked for in va2000_mod.c through the kit's
+# DDI_FB_REGISTER (k46.1.6), on both lines and with no switch: a k46 kernel
+# without it, the 68030 and a kit from before it all leave the default class.
 #
 # Copyright (c) 2026 Jussi Alanärä.  SPDX-License-Identifier: MIT
 
@@ -50,7 +50,7 @@ OBJS   = va2000.o va2000_mod.o
 MODOUT = $(TOP)/module/build/$(LINE)
 SRC    = $(TOP)/src
 CFLAGS = -DVA2000_MODULE \
-	 $(if $(filter k46,$(LINE)),-DVA2000_KVA $(if $(FB_CM),-DVA2000_FB_CM),-DVA2000_SPT)
+	 $(if $(filter k46,$(LINE)),-DVA2000_KVA,-DVA2000_SPT)
 vpath %.c $(SRC)
 include $(KIT)/mk/module.mk
 $(MODOUT)/obj/va2000.o: $(SRC)/va2000.h

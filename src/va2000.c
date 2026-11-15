@@ -34,7 +34,8 @@
  *                  choice is made at run time from the board's address.
  *   VA2000_FB_CM   with VA2000_KVA: register the framebuffer's cache class
  *                  (hat_cm_fb_add).  On by default in the static VA2000_KVA
- *                  build, off in the module form; see va2000_map_regs().
+ *                  build; the module form asks for the class through the
+ *                  module interface instead (module/va2000_mod.c).
  *   VA2000_MODULE  the loadable module form (module/ in this repository).
  *
  * Registers are write-only from kernel context; reads return the
@@ -154,6 +155,9 @@ extern void dev_kvunmap();
 #ifndef VA2000_KVA
 #error "VA2000_FB_CM is the 68040/68060 framebuffer cache class: it needs VA2000_KVA"
 #endif
+#ifdef VA2000_MODULE
+#error "VA2000_FB_CM is the static form's: the module asks for the class in module/va2000_mod.c"
+#endif
 /*
  *   int hat_cm_fb_add(lo_pfn, hi_pfn)          -- register a half-open frame
  *                                                 buffer PFN interval; the pages
@@ -230,13 +234,13 @@ int dev;
      * literal shift: the Model-B header set is what makes it 4 KiB here, and
      * that is the mechanism that exists to stop this class of bug.
      *
-     * THE ONE HOOK POINT for the framebuffer cache class.  hat_cm_fb_add is
-     * linked into the port's static kernel, but it is not an interface a
-     * loadable module may import, so the module form is built without
-     * VA2000_FB_CM and its framebuffer pages keep the kernel's default class
-     * (correct, only slower).  When the module interface for this exists,
-     * this call is what changes to use it, and the module is then built with
-     * VA2000_FB_CM.  Nothing else in the driver depends on it. */
+     * THE ONE HOOK POINT for the framebuffer cache class in the static
+     * kernel.  hat_cm_fb_add is linked into the port's static kernel, but it
+     * is not an interface a loadable module may import, so the module form is
+     * built without VA2000_FB_CM and asks for the same window through the
+     * module interface (fb_register) from its load routine, before anything
+     * can open the device (module/va2000_mod.c).  Nothing else in the driver
+     * depends on it. */
     if (!hat_cm_fb_add(phystopfn(va2000_boards[dev] + VA2000_FB_OFFSET),
                        phystopfn(va2000_boards[dev]
                                  + (unsigned long)va2000_size[dev])))
@@ -273,7 +277,8 @@ int dev;
  * The module form only: its load routine calls this when no board answered,
  * and its unload routine (which the module core calls after a load that failed
  * later) so that nothing points into the kernel's arena from a freed module.
- * A framebuffer cache-class registration (VA2000_FB_CM) is not undone.
+ * A framebuffer cache-class registration is not undone: the kernel keeps it
+ * for the rest of the boot.
  */
 void
 va2000_unmap_all()
