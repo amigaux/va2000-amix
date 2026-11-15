@@ -26,6 +26,17 @@
  * without it, on the vanilla 68030 kernel, the two are the same value and this
  * driver behaves exactly as it always has.
  *
+ * Build switches.  None is set for the static driver of the vanilla 68030
+ * kernel, and that build is the same as before they existed.
+ *   VA2000_KVA     68040/68060 (the port): the board is mapped with dev_kvmap.
+ *   VA2000_SPT     68030: a board above VSECT1 (Zorro III) is mapped with
+ *                  sptalloc; a Zorro II board keeps the direct path.  The
+ *                  choice is made at run time from the board's address.
+ *   VA2000_FB_CM   with VA2000_KVA: register the framebuffer's cache class
+ *                  (hat_cm_fb_add).  On by default in the static VA2000_KVA
+ *                  build, off in the module form; see va2000_map_regs().
+ *   VA2000_MODULE  the loadable module form (module/ in this repository).
+ *
  * Registers are write-only from kernel context; reads return the
  * firmware version byte (0x5a for fw98).  RTG activation
  * (capture_mode=0) must be performed from userspace via mmap.
@@ -131,15 +142,52 @@ static unsigned short va2000_monitor_switch[VA2000_MAXBOARDS];
  *                                                 cache class; NULL on failure
  *   void  dev_kvunmap(kva, nbytes)             -- undo one dev_kvmap
  * flags bit 0 = NOSLEEP.
- *
+ */
+extern char *dev_kvmap();
+extern void dev_kvunmap();
+#ifndef VA2000_MODULE
+#define VA2000_FB_CM    /* the port's static kernel links hat_cm_fb_add */
+#endif
+#endif
+
+#ifdef VA2000_FB_CM
+#ifndef VA2000_KVA
+#error "VA2000_FB_CM is the 68040/68060 framebuffer cache class: it needs VA2000_KVA"
+#endif
+/*
  *   int hat_cm_fb_add(lo_pfn, hi_pfn)          -- register a half-open frame
  *                                                 buffer PFN interval; the pages
  *                                                 in it are mapped noncacheable
  *                                                 but NOT serialised.  1 = done.
  */
-extern char *dev_kvmap();
-extern void dev_kvunmap();
 extern int hat_cm_fb_add();
+#endif
+
+#ifdef VA2000_SPT
+#ifdef VA2000_KVA
+#error "VA2000_SPT is the 68030 mapping, VA2000_KVA the 68040/68060 one: set one"
+#endif
+/*
+ * Stock AMIX:
+ *   int   sptalloc(npages, mode, pfn, flag)    -- with pfn nonzero, map those
+ *                                                 physical pages into the kernel
+ *                                                 (from the 4 MiB sptmap); the
+ *                                                 address, or 0 when there is
+ *                                                 no room
+ *   void  sptfree(kva, npages, flag)           -- undo it; flag 1 goes through
+ *                                                 segkmem_mapout, which flushes
+ * int, as <vm/seg_kmem.h> declares it: the kernel returns the address in d0,
+ * and a char * declaration would make this compiler read a0 instead.
+ */
+extern int sptalloc();
+extern void sptfree();
+#define VA2000_NPAGES(len)  ((int)(((len) + NBPP - 1) / NBPP))
+/* the board does not lie wholly in the kernel's one-to-one map below VSECT1 */
+#define VA2000_ABOVE(base, size) \
+    ((unsigned long)(base) >= VSECT1 || \
+     VSECT1 - (unsigned long)(base) < (unsigned long)(size))
+/* 1 when va2000_regs[] is an sptalloc mapping, 0 when it is the direct address */
+static char va2000_spt[VA2000_MAXBOARDS];
 #endif
 
 /*
@@ -175,22 +223,77 @@ int dev;
         printf("va2000: cannot map registers at 0x%x\n", va2000_boards[dev]);
         return 0;
     }
+#ifdef VA2000_FB_CM
     /* Framebuffer pages get the noncacheable-but-not-serialised class; the
      * register page stays outside the interval and keeps the serialised one,
      * which is what a control register needs.  phystopfn() rather than a
      * literal shift: the Model-B header set is what makes it 4 KiB here, and
-     * that is the mechanism that exists to stop this class of bug. */
+     * that is the mechanism that exists to stop this class of bug.
+     *
+     * THE ONE HOOK POINT for the framebuffer cache class.  hat_cm_fb_add is
+     * linked into the port's static kernel, but it is not an interface a
+     * loadable module may import, so the module form is built without
+     * VA2000_FB_CM and its framebuffer pages keep the kernel's default class
+     * (correct, only slower).  When the module interface for this exists,
+     * this call is what changes to use it, and the module is then built with
+     * VA2000_FB_CM.  Nothing else in the driver depends on it. */
     if (!hat_cm_fb_add(phystopfn(va2000_boards[dev] + VA2000_FB_OFFSET),
                        phystopfn(va2000_boards[dev]
                                  + (unsigned long)va2000_size[dev])))
         printf("va2000: framebuffer cache class NOT registered\n");
+#endif
 #else
+#ifdef VA2000_SPT
+    /* 68030, Zorro III: the board is above the one-to-one map, so it is
+     * reached through a mapping of its register window (2 pages of 2 KiB).
+     * The framebuffer is not mapped here: user mmap takes its physical pages,
+     * and read()/write() map a temporary window (va2000_spt_rdwr). */
+    if (VA2000_ABOVE(va2000_boards[dev], va2000_size[dev])) {
+        va2000_regs[dev] = (long)sptalloc(VA2000_NPAGES(VA2000_REGLEN), PG_V,
+                                          phystopfn(va2000_boards[dev]), 0);
+        if (!va2000_regs[dev]) {
+            printf("va2000: cannot map registers at 0x%x\n", va2000_boards[dev]);
+            return 0;
+        }
+        va2000_spt[dev] = 1;
+        return 1;
+    }
+#endif
     /* Vanilla 68030 kernel: the board is in transparently translated space, and
      * there is no cache-class selector to register a framebuffer with. */
     va2000_regs[dev] = va2000_boards[dev];
 #endif
     return va2000_regs[dev] ? 1 : 0;
 }
+
+#ifdef VA2000_MODULE
+/*
+ * va2000_unmap_all() -- release the register mappings va2000_map_regs() made.
+ *
+ * The module form only: its load routine calls this when no board answered,
+ * and its unload routine (which the module core calls after a load that failed
+ * later) so that nothing points into the kernel's arena from a freed module.
+ * A framebuffer cache-class registration (VA2000_FB_CM) is not undone.
+ */
+void
+va2000_unmap_all()
+{
+    int i;
+
+    for (i = 0; i < VA2000_MAXBOARDS; i++) {
+        if (!va2000_regs[i]) continue;
+#ifdef VA2000_KVA
+        dev_kvunmap((char *)va2000_regs[i], VA2000_REGLEN);
+#endif
+#ifdef VA2000_SPT
+        if (va2000_spt[i])
+            sptfree((char *)va2000_regs[i], VA2000_NPAGES(VA2000_REGLEN), 1);
+        va2000_spt[i] = 0;
+#endif
+        va2000_regs[i] = 0;
+    }
+}
+#endif
 
 static int
 va2000_present(base)
@@ -435,7 +538,44 @@ struct cred *cr;
  * The window is mapped noncacheable-SERIALISED, which is the conservative
  * class: correct everywhere, and it deliberately does not depend on the
  * framebuffer cache-class work.  Revisit only with a measurement.
+ *
+ * Under -DVA2000_SPT a Zorro III board on the 68030 takes the same shape with
+ * sptalloc (va2000_spt_rdwr below); a Zorro II board keeps the direct path.
  */
+#ifdef VA2000_SPT
+static int
+va2000_spt_rdwr(dev, off, count, direction, uiop)
+int dev;
+unsigned long off;
+unsigned long count;
+uio_rw_t direction;
+struct uio *uiop;
+{
+    unsigned long n;
+    unsigned long pa;
+    unsigned long in;
+    int npages;
+    char *kva;
+    int error;
+
+    while (count > 0) {
+        n = count;
+        if (n > VA2000_WINLEN) n = VA2000_WINLEN;
+        pa = (unsigned long)va2000_boards[dev] + off;
+        in = pa & (NBPP - 1);           /* the window starts on a page */
+        npages = VA2000_NPAGES(in + n);
+        kva = (char *)sptalloc(npages, PG_V, phystopfn(pa), 0);
+        if (!kva) return ENOMEM;
+        error = uiomove(kva + in, n, direction, uiop);
+        sptfree(kva, npages, 1);
+        if (error) return error;
+        off += n;
+        count -= n;
+    }
+    return 0;
+}
+#endif
+
 static int
 va2000rdwr(dev, direction, uiop)
 int dev;
@@ -474,6 +614,10 @@ struct uio *uiop;
     }
     return 0;
 #else
+#ifdef VA2000_SPT
+    if (va2000_spt[dev])
+        return va2000_spt_rdwr(dev, off, count, direction, uiop);
+#endif
     if (error = uiomove(
             (char *)(va2000_boards[dev]) + off,
             count, direction, uiop))
@@ -507,9 +651,11 @@ int maxprot;
     if (mindev >= VA2000_MAXBOARDS) return -1;
     if (!va2000_boards[mindev]) return -1;
     /* PHYSICAL on purpose: the VM builds the user mapping from this page frame
-     * number.  Bounded by the AutoConfig aperture, not by a compile-time 4 MB. */
+     * number.  Bounded by the AutoConfig aperture, not by a compile-time 4 MB.
+     * PNUMSHFT is the kernel's own page shift (<sys/immu.h>): 11 on the stock
+     * 68030 kernel (2 KiB pages), 12 with the port's 4 KiB-page headers. */
     if (offset >= 0 && offset < (off_t)va2000_size[mindev])
-        return (int)((va2000_boards[mindev] + offset) >> 11);
+        return (int)((va2000_boards[mindev] + offset) >> PNUMSHFT);
     return -1;
 }
 
