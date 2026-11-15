@@ -116,9 +116,18 @@ tools/
   amix_zp1_scan.c        Zorro bus scanner
   amix_zp3_mmap.c        Zorro mmap test
 
+module/
+  Makefile, Master       The same driver as a loadable kernel module (see module/README.md)
+  va2000_mod.c           Module wrapper: switch row for major 68, load and unload
+  man/va2000.7           Manual page for the device
+
 KERNEL_CHANGES.md        Required changes to AMIX kernel source files
 install-va2000-driver.sh Experimental install script — copies driver and patches kernel sources
 ```
+
+The module form is for kernels with a loadable-module core. It serves programs
+that open `/dev/va2000` directly; the console changes in `KERNEL_CHANGES.md`
+are kernel source patches and stay with the static form.
 
 ---
 
@@ -177,9 +186,12 @@ cc tools/va2000_spy.c -o va2000_spy
 
 Following Piccolo driver pattern:
 ```c
-return (int)((va2000_boards[mindev] + offset) >> 11);
+return (int)((va2000_boards[mindev] + offset) >> PNUMSHFT);
 ```
-Not `phystopfn()` which was tried but did not improve behavior.
+Not `phystopfn()` which was tried but did not improve behavior. `PNUMSHFT` is
+the kernel's own page shift from `<sys/immu.h>`: 11 on the stock 68030 kernel
+(2 KiB pages, the same code as the literal `>> 11` it replaces), 12 with the
+4 KiB-page headers of the 68040/68060 port.
 
 ---
 

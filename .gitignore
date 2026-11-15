@@ -10,3 +10,6 @@ CLAUDE.md
 # somebody tries, and an untracked object file is exactly what `git add -A` sweeps in unnoticed.
 *.o
 *.a
+
+# The loadable module's build output (make -C module).
+/module/build/

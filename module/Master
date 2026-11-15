@@ -1,0 +1,10 @@
+# va2000: its .moddata keys and the definition line, as the Amix ABI kit's
+# mkmod reads a Master (the kit's docs/guide.md, section 3).  One Master for
+# both kernel lines: no $cpu, the kit gives the line's (68030 or 68040).
+# Demand class: the module core loads it at the first open of /dev/va2000.
+$modtype drv
+$class demand
+$majors c:68
+$unload never
+$desc MNT VA2000 RTG framebuffer
+va2000	va2000

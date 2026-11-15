@@ -1,0 +1,193 @@
+.TH VA2000 7 "15 November 2026" "va2000"
+.SH NAME
+va2000 \- the MNT VA2000 RTG graphics card
+.SH SYNOPSIS
+.B /dev/va2000
+.br
+.B #include \(dqva2000.h\(dq
+.SH DESCRIPTION
+The MNT VA2000 is a graphics card for the Zorro bus that also passes the
+Amiga's own picture through to its monitor output.
+.B /dev/va2000
+gives programs its registers and its framebuffer: they set a display mode,
+draw into the framebuffer through
+.BR mmap (2),
+and switch the monitor output between the Amiga's picture and the card's.
+The X server
+.B Xrtg
+is such a program.
+.PP
+The card is found by AutoConfig, manufacturer 0x6D6E, product 0x01, with
+firmware version 5 or later.
+Its address space is the same in both bus modes:
+.TP 20
+.B 0x000000\-0x000FFF
+the registers, 16 bits wide;
+.TP
+.B 0x010000\-
+the framebuffer, to the end of the aperture.
+.PP
+The aperture is 4 MB on a Zorro II board and 32 MB on a Zorro III board; the
+driver takes its size from AutoConfig.
+Minor 0 is the first board, minor 1 the second.
+.PP
+The driver is linked into the kernel, or is the loadable kernel module
+.BR va2000 ,
+of the demand class: the module core loads it at the first open of
+.BR /dev/va2000 ,
+and keeps it only when a board answers.
+The module cannot be unloaded.
+.SS The picture
+Opening the device changes nothing on the screen.
+A program shows the card's picture by setting a mode, through
+.B SVGAIOCSetScreenMode
+or by writing the mode registers through its own mapping.
+At the last close of the device the driver puts the Amiga's picture back
+(passthrough), so a program that dies does not leave the monitor on the card.
+.SH IOCTLS
+The argument is a pointer for the requests that pass a structure or a value
+in memory; the others return their result as the value of
+.BR ioctl (2).
+.TP
+.B VA2IOC_GETFW
+the firmware version.
+.TP
+.BR VA2IOC_GETSCREENW ", " VA2IOC_GETSCREENH
+the width and height of the last mode set with
+.BR SVGAIOCSetScreenMode ,
+0 before it.
+.TP
+.B VA2IOC_GETCOLORMODE
+the value read from the card's colour mode register (0 is 8 bits per pixel,
+1 is 16).
+The card's registers have read back the firmware version on the firmware
+tried so far, so this answer is not reliable.
+.PP
+The
+.B SVGAIOC
+requests follow the
+.B svgaioctl.h
+interface of the Amix SVGA X servers:
+.TP
+.B SVGAIOCGetBoardData
+fills a
+.BR "struct SVGABoardData" :
+card id 16, the framebuffer size, a pixel clock limit of 100 MHz, blitter
+and panning present.
+.TP
+.B SVGAIOCGetFBufSize
+the framebuffer size in bytes, as the value of the call.
+.TP
+.B SVGAIOCSetScreenMode
+sets a mode from a
+.BR "struct SVGAScreenMode" .
+The visible size is
+.B SVGASM_HDisplayEnd
+by
+.BR SVGASM_VDisplayEnd ,
+not the width and height fields.
+.B SVGASM_ColorMode
+is
+.B SVGACM_8BIT
+or 16 bits per pixel for any other value.
+A mode of at most 640 by 360 is shown doubled in both directions.
+The pixel clock is rounded up to 40, 75 or 100 MHz.
+.TP
+.B SVGAIOCGetScreenData
+fills a
+.B struct SVGAScreenData
+for the last mode set with
+.BR SVGAIOCSetScreenMode .
+.TP
+.BR SVGAIOCGetMonitorSwitch ", " SVGAIOCSetMonitorSwitch
+an unsigned short:
+.B SVGAMONITORSWITCH_Amiga
+(1) puts the Amiga's picture back;
+.B SVGAMONITORSWITCH_SVGA
+(2) turns passthrough off, but does not restore the card's mode: the program
+sets its mode again after it.
+Another value gives
+.BR EINVAL .
+.TP
+.B SVGAIOCBlankScreen
+an unsigned short: 0 shows the Amiga's picture, another value the card's.
+.TP
+.B SVGAIOCClearBoardMem
+clears the visible part of the framebuffer with the blitter (16-bit modes).
+.TP
+.B SVGAIOCSetRGB
+four unsigned longs, the index and the red, green and blue values: sets one
+entry of the 256-entry palette of the 8-bit mode.
+.TP
+.BR SVGAIOCGetRGB ", " SVGAIOCGetPanPos ", " SVGAIOCGetBorderColor
+answer with fixed values: the palette cannot be read back, and panning and
+the border colour are not implemented.
+.TP
+.BR SVGAIOCSetPanPos ", " SVGAIOCSetPanXPos ", " SVGAIOCSetPanYPos ", " SVGAIOCSetBorderColor ", " SVGAIOCStartBlit ", " SVGAIOCEndBlit ", " SVGAIOCDisableScrGrp ", " SVGAIOCEnableScrGrp
+accepted and do nothing.
+.SH MMAP
+.BR mmap (2)
+of the device maps the card's address space from offset 0 to the end of the
+aperture: the registers at offset 0, the framebuffer at offset 0x10000.
+The pages are the card's own; the mapping lasts while the program holds it.
+.SH READ AND WRITE
+.BR read (2)
+and
+.BR write (2)
+reach the same address space at the file offset.
+They are slow and exist for compatibility; programs use
+.BR mmap (2).
+.SH SUPPORTED BOARDS AND KERNELS
+.TP 4
+\(bu
+a 68030 kernel, Zorro II board: the registers are reached at the board's
+AutoConfig address;
+.TP
+\(bu
+a 68030 kernel, Zorro III board (at 0x40000000 or above): the registers are
+mapped into the kernel, and so is a temporary window for each
+.B read
+and
+.BR write .
+The module does this; the static form only when built with
+.BR VA2000_SPT ;
+.TP
+\(bu
+a 68040 or 68060 kernel, either bus: the registers are mapped noncacheable
+and serialised.
+In the static form the framebuffer is also given the faster noncacheable,
+not serialised class; the module leaves it at the kernel's default class.
+.SH UNTESTED
+The card cannot be emulated.
+The static form has run on a 68040 and a 68060 with a Zorro III board, and
+on a 68030 with a Zorro II board before the Zorro III changes.
+The module has not run on hardware on either kernel line, and the 68030
+Zorro III path has never run.
+Byte-wide register access has not been tried; the driver makes only aligned
+16-bit accesses.
+.SH ERRORS
+.TP 10
+.B ENXIO
+no board for this minor, the board does not answer, or a
+.BR read " or " write
+offset beyond the aperture.
+.TP
+.B EINVAL
+an unknown request, or a monitor switch value other than 1 or 2.
+.TP
+.B EFAULT
+a bad argument pointer.
+.TP
+.B ENOMEM
+.BR read " or " write
+could not map its window.
+.SH FILES
+.TP
+.B /dev/va2000
+character major 68, minor 0.
+.TP
+.B /etc/conf/mod.d/va2000
+the module.
+.SH SEE ALSO
+.BR ioctl (2),
+.BR mmap (2)
